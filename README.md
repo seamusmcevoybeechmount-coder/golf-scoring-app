@@ -29,3 +29,4 @@
 ## Notes
 - API routes use database RPCs (`create_competition`, `add_player`, `upsert_score`).
 - Ensure you ran the SQL schema in Supabase before using the app.
+"# golf-scoring-app" 
