@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 export default function Page() {
   return (
     <div className="p-6 text-center">
-      <h1 className="text-2xl font-bold">Authentication Disabled</h1>
+      <h1 className="text-2xl font-bold">Authentication Disabled Welcome to the golf scoring application for the heath golf club</h1>
       <p className="mt-2 text-gray-600">
         This application does not use sign-in or user accounts.
       </p>
