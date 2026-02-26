@@ -1,9 +1,8 @@
-import type { Metadata } from 'next';
-import './globals.css';
+import "./globals.css";
 
-export const metadata: Metadata = {
-  title: 'Golf Scoring App',
-  description: 'Mobile scoring with live leaderboards (Supabase + Next.js)',
+export const metadata = {
+  title: "Golf Scoring App",
+  description: "Mobile scoring with live leaderboards (Supabase + Next.js)",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -18,7 +17,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <a className="hover:underline" href="/leaderboard">Leaderboard</a>
             </nav>
           </header>
-          <main className="mt-4">{children}</main>
+
+          <main className="mt-4">
+            {children}   {/* THIS is the missing piece */}
+          </main>
         </div>
       </body>
     </html>
