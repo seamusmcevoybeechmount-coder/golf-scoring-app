@@ -7,6 +7,18 @@ import { supabase } from "@/lib/supabaseClient";
 type Tee = { id: string; tee_name: string };
 type PlayerDraft = { name: string; index: string; teeId: string };
 
+function parseNumber(val: string): number | null {
+  if (val.trim() === "") return null;
+  const n = Number(val.replace(",", ".")); // allow commas typed on mobile
+  return Number.isFinite(n) ? n : null;
+}
+
+function isValidWHS(val: string): boolean {
+  const n = parseNumber(val);
+  if (n === null) return false;        // required when name is present
+  return n >= 0 && n <= 54;            // inclusive bounds
+}
+
 export default function PlayersClient() {
   const sp = useSearchParams();
   const router = useRouter();
@@ -26,8 +38,14 @@ export default function PlayersClient() {
         .select("id, tee_name")
         .eq("course_id", courseId)
         .order("tee_name");
-      if (error) console.error(error);
+
+      if (error) {
+        console.error(error);
+        return;
+      }
+
       setTees(data ?? []);
+
       // Preselect first tee for each player row (only if not set)
       if (data && data.length) {
         setPlayers((prev) =>
@@ -37,14 +55,27 @@ export default function PlayersClient() {
     })();
   }, [courseId]);
 
+  /** Field-level error for a single row (only enforced when name is non-empty) */
+  function whsErrorFor(row: PlayerDraft): string | null {
+    if (!row.name.trim()) return null; // if no name, no validation required
+    if (row.index.trim() === "") return "W.H.S. Handicap is required.";
+    const n = parseNumber(row.index);
+    if (n === null) return "Enter a number (e.g., 12.4).";
+    if (n < 0 || n > 54) return "Value must be between 0 and 54.";
+    return null;
+  }
+
+  /** Whether any visible validation error exists across rows */
+  const hasAnyError = useMemo(() => {
+    return players.some((p) => whsErrorFor(p) !== null);
+  }, [players]);
+
   const canSubmit = useMemo(() => {
     if (!courseId || tees.length === 0) return false;
-    return (
-      players.some((p) => p.name.trim()) &&
-      // if a name is given, a tee must be chosen
-      players.every((p) => !p.name || p.teeId)
-    );
-  }, [courseId, tees, players]);
+    const hasAtLeastOneNamed = players.some((p) => p.name.trim());
+    const allNamedHaveTee = players.every((p) => !p.name || p.teeId);
+    return hasAtLeastOneNamed && allNamedHaveTee && !hasAnyError;
+  }, [courseId, tees, players, hasAnyError]);
 
   const addPlayer = () =>
     setPlayers((prev) => [
@@ -68,10 +99,22 @@ export default function PlayersClient() {
     const cleaned = players
       .map((p) => ({
         name: p.name.trim(),
-        handicap_index: Number(p.index),
+        handicap_index: parseNumber(p.index), // already validated non-null if name present
         tee_id: p.teeId || tees[0]?.id,
       }))
-      .filter((p) => p.name && !Number.isNaN(p.handicap_index) && p.tee_id);
+      .filter(
+        (p) =>
+          p.name &&
+          p.handicap_index !== null &&
+          !Number.isNaN(p.handicap_index) &&
+          p.handicap_index! >= 0 &&
+          p.handicap_index! <= 54 &&
+          p.tee_id
+      )
+      .map((p) => ({
+        ...p,
+        handicap_index: Number(p.handicap_index),
+      }));
 
     if (cleaned.length === 0) return;
 
@@ -85,10 +128,12 @@ export default function PlayersClient() {
         name: null,
       }),
     });
+
     if (!compRes.ok) {
       alert("Failed to create competition");
       return;
     }
+
     const { competition_id } = await compRes.json();
 
     // 3) Add players with their own tee_id
@@ -100,6 +145,7 @@ export default function PlayersClient() {
         players: cleaned,
       }),
     });
+
     if (!addRes.ok) {
       alert("Failed to add players");
       return;
@@ -128,55 +174,81 @@ export default function PlayersClient() {
           <div className="col-span-4">Player’s Name</div>
           <div className="col-span-3">W.H.S. Handicap</div>
           <div className="col-span-4">Tee’s Being Played</div>
-          <div className="col-span-1"></div>
+          <div className="col-span-1" />
         </div>
 
-        {players.map((p, i) => (
-          <div
-            key={i}
-            className="grid grid-cols-12 gap-2 items-center bg-white p-3 rounded shadow"
-          >
-            {/* Player Name */}
-            <input
-              placeholder={`Player ${i + 1}`}
-              className="col-span-4 p-2 border rounded"
-              value={p.name}
-              onChange={(e) => setVal(i, "name", e.target.value)}
-            />
-
-            {/* Handicap Index */}
-            <input
-              placeholder="e.g. 12.4"
-              className="col-span-3 p-2 border rounded"
-              inputMode="decimal"
-              value={p.index}
-              onChange={(e) => setVal(i, "index", e.target.value)}
-            />
-
-            {/* Tee selection */}
-            <select
-              className="col-span-4 p-2 bg-white border rounded"
-              value={p.teeId}
-              onChange={(e) => setVal(i, "teeId", e.target.value)}
+        {players.map((p, i) => {
+          const whsError = whsErrorFor(p);
+          const whsInvalid = Boolean(whsError);
+          return (
+            <div
+              key={i}
+              className="grid grid-cols-12 gap-2 items-start bg-white p-3 rounded shadow"
             >
-              {tees.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.tee_name}
-                </option>
-              ))}
-            </select>
+              {/* Player Name */}
+              <div className="col-span-4">
+                <input
+                  placeholder={`Player ${i + 1}`}
+                  className="w-full p-2 border rounded"
+                  value={p.name}
+                  onChange={(e) => setVal(i, "name", e.target.value)}
+                />
+              </div>
 
-            {/* Remove button */}
-            <button
-              className="col-span-1 text-red-600"
-              onClick={() => removePlayer(i)}
-              title="Remove"
-              aria-label={`Remove player row ${i + 1}`}
-            >
-              ×
-            </button>
-          </div>
-        ))}
+              {/* Handicap Index with inline validation */}
+              <div className="col-span-3">
+                <input
+                  placeholder="e.g. 12.4"
+                  className={`w-full p-2 border rounded ${
+                    whsInvalid ? "border-red-500 focus:outline-red-500" : ""
+                  }`}
+                  inputMode="decimal"
+                  // pattern allows numbers like 12, 12.4, .5, 0, 54
+                  pattern="^([0-9]{1,2}(\.[0-9]{1,2})?|54(\.0{1,2})?)$"
+                  value={p.index}
+                  onChange={(e) => setVal(i, "index", e.target.value)}
+                  aria-invalid={whsInvalid || undefined}
+                  aria-describedby={whsInvalid ? `whs-error-${i}` : undefined}
+                />
+                {whsInvalid && (
+                  <p
+                    id={`whs-error-${i}`}
+                    className="mt-1 text-xs text-red-600"
+                  >
+                    {whsError}
+                  </p>
+                )}
+              </div>
+
+              {/* Tee selection */}
+              <div className="col-span-4">
+                <select
+                  className="w-full p-2 bg-white border rounded"
+                  value={p.teeId}
+                  onChange={(e) => setVal(i, "teeId", e.target.value)}
+                >
+                  {tees.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.tee_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Remove button */}
+              <div className="col-span-1 flex justify-center pt-1">
+                <button
+                  className="text-red-600"
+                  onClick={() => removePlayer(i)}
+                  title="Remove"
+                  aria-label={`Remove player row ${i + 1}`}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          );
+        })}
 
         <button onClick={addPlayer} className="px-3 py-2 bg-gray-200 rounded">
           + Add Player
