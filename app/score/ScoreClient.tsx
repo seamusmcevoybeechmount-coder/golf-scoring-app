@@ -5,9 +5,12 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
-// Types
-type Player = { id: string; player_name: string };
-type ScoreMap = { [playerId: string]: { [hole: number]: number | undefined } };
+type Player = {
+  id: string;
+  player_name: string;
+  handicap_index: number;
+  playing_handicap: number; // using WHS playing handicap directly
+};
 
 type TeeRow = {
   id: string;
@@ -16,7 +19,12 @@ type TeeRow = {
   stroke_index: number[];
   yardage: number[];
   metres: number[];
+  course_rating: number;
+  slope_rating: number;
+  course_par: number;
 };
+
+type ScoreMap = { [playerId: string]: { [hole: number]: number | undefined } };
 
 const DEFAULT_STROKES = 5;
 
@@ -25,24 +33,23 @@ export default function ScoreClient() {
   const competitionId = sp.get("competition_id");
 
   const [players, setPlayers] = useState<Player[]>([]);
-  const [currentHole, setCurrentHole] = useState(1);
   const [scores, setScores] = useState<ScoreMap>({});
   const [tee, setTee] = useState<TeeRow | null>(null);
+  const [currentHole, setCurrentHole] = useState(1);
   const [showFinishConfirm, setShowFinishConfirm] = useState(false);
 
-  // Derived hole info
+  // Derived hole meta
   const holePar = tee?.par?.[currentHole - 1] ?? null;
   const holeSI = tee?.stroke_index?.[currentHole - 1] ?? null;
   const holeYards = tee?.yardage?.[currentHole - 1] ?? null;
   const holeMetres = tee?.metres?.[currentHole - 1] ?? null;
 
-  // Header title
   const holeTitle = useMemo(() => {
-    if (holeSI != null) return `HOLE ${currentHole} • PAR ${holePar}`;
+    if (holePar != null) return `HOLE ${currentHole} • PAR ${holePar}`;
     return `HOLE ${currentHole}`;
-  }, [currentHole, holePar, holeSI]);
+  }, [currentHole, holePar]);
 
-  // Load competition → tee → hole data
+  // Load players, scores, tee meta
   useEffect(() => {
     if (!competitionId) return;
 
@@ -50,25 +57,26 @@ export default function ScoreClient() {
       // Load players
       const { data: playersData } = await supabase
         .from("players")
-        .select("id, player_name")
+        .select("id, player_name, handicap_index, playing_handicap, tee_id")
         .eq("competition_id", competitionId)
         .order("created_at");
+
       setPlayers(playersData ?? []);
 
-      // Load scores
-      const { data: scoreData } = await supabase
+      // Load score entries
+      const { data: entryData } = await supabase
         .from("score_entries")
         .select("player_id, hole_number, strokes")
         .eq("competition_id", competitionId);
 
       const map: ScoreMap = {};
-      (scoreData ?? []).forEach((r: any) => {
+      (entryData ?? []).forEach((r: any) => {
         if (!map[r.player_id]) map[r.player_id] = {};
         map[r.player_id][r.hole_number] = r.strokes ?? undefined;
       });
       setScores(map);
 
-      // Load competition → tee_id
+      // Get tee_id from competition
       const { data: compRow } = await supabase
         .from("competitions")
         .select("tee_id")
@@ -77,10 +85,12 @@ export default function ScoreClient() {
 
       if (!compRow?.tee_id) return;
 
-      // Load tee arrays
+      // Load tee metadata row
       const { data: teeRow } = await supabase
         .from("tees")
-        .select("id, tee_name, par, stroke_index, yardage, metres")
+        .select(
+          "id, tee_name, par, stroke_index, yardage, metres, course_rating, slope_rating, course_par"
+        )
         .eq("id", compRow.tee_id)
         .single();
 
@@ -96,7 +106,7 @@ export default function ScoreClient() {
     setCurrentHole((h) => ((h - 2 + 18) % 18) + 1);
   }
 
-  // Set stroke manually
+  // Manual set
   function setStroke(playerId: string, value: string) {
     const n = value.trim() === "" ? undefined : Number(value);
     setScores((prev) => ({
@@ -108,7 +118,7 @@ export default function ScoreClient() {
     }));
   }
 
-  // + / – buttons
+  // + / –
   function adjustStroke(playerId: string, delta: number) {
     const current = scores[playerId]?.[currentHole];
     const next = Math.max(1, (current ?? DEFAULT_STROKES) + delta);
@@ -122,7 +132,7 @@ export default function ScoreClient() {
     }));
   }
 
-  // Save hole
+  // Save strokes for a hole
   async function saveHole() {
     if (!competitionId) return;
 
@@ -154,22 +164,57 @@ export default function ScoreClient() {
     await saveHole();
     nextHole();
   }
-
   async function handlePrev() {
     await saveHole();
     prevHole();
   }
-
   async function handleFinish() {
     await saveHole();
     setShowFinishConfirm(false);
     window.location.href = `/leaderboard?competition_id=${competitionId}`;
   }
 
+  // -------------------------------
+  // WHS STROKES RECEIVED + POINTS
+  // -------------------------------
+
+  function getShotsReceived(playingHandicap: number, si: number | null): number {
+    if (si == null) return 0;
+
+    // Standard WHS: allocate PH across SI 1..18
+    if (playingHandicap <= 18) {
+      // 1 shot on SI 1..PH
+      return si <= playingHandicap ? 1 : 0;
+    }
+
+    // PH > 18:
+    // 1 shot on all holes + 1 extra on SI 1..(PH - 18)
+    const base = 1;
+    const extras = playingHandicap - 18;
+    return si <= extras ? base + 1 : base;
+  }
+
+  function getStablefordPoints(nett: number | null): number {
+    if (nett == null) return 0;
+
+    if (nett <= -3) return 6; // condor
+    if (nett === -2) return 5; // albatross
+    if (nett === -1) return 4; // eagle
+    if (nett === 0) return 3; // birdie
+    if (nett === 1) return 2; // par
+    if (nett === 2) return 1; // bogey
+    return 0; // double bogey or worse
+  }
+
+  // -------------------------------
+  // UI Rendering
+  // -------------------------------
+
   if (!competitionId) {
     return (
       <div className="p-4 text-red-600">
-        Missing competition id. Please start from the Players page.
+        Missing competition id.  
+        Please start from the Players page.
       </div>
     );
   }
@@ -177,27 +222,22 @@ export default function ScoreClient() {
   return (
     <div className="space-y-6 pb-10">
 
-      {/* PREMIUM HOLE HEADER CARD */}
+      {/* PREMIUM HEADER CARD */}
       <div className="bg-white rounded-lg shadow p-5 text-center border">
         <h2 className="text-4xl font-extrabold uppercase tracking-wide">
           {holeTitle}
         </h2>
 
-        {/* Stroke Index */}
         {holeSI != null && (
-          <p className="text-lg font-semibold mt-1">
-            Stroke Index: {holeSI}
-          </p>
+          <p className="text-lg font-semibold mt-1">Stroke Index: {holeSI}</p>
         )}
 
-        {/* Tee Name (uppercase) */}
         {tee && (
           <p className="mt-2 text-gray-700 font-semibold uppercase">
             {tee.tee_name} TEE
           </p>
         )}
 
-        {/* Yardage + Metres */}
         {holeYards != null && holeMetres != null && (
           <p className="text-sm text-gray-600 mt-1">
             {holeYards} yds / {holeMetres} m
@@ -207,7 +247,7 @@ export default function ScoreClient() {
 
       {/* Prev / Next / Finish */}
       <div className="flex items-center justify-between bg-white p-3 rounded shadow">
-        <button onClick={handlePrev} className="px-3 py-2 bg-gray-200 rounded">
+        <button className="px-3 py-2 bg-gray-200 rounded" onClick={handlePrev}>
           Prev
         </button>
 
@@ -230,7 +270,7 @@ export default function ScoreClient() {
         )}
       </div>
 
-      {/* Leaderboard links */}
+      {/* Leaderboard Links */}
       <div className="flex gap-2">
         <Link
           href={`/leaderboard?competition_id=${competitionId}`}
@@ -249,58 +289,98 @@ export default function ScoreClient() {
         </Link>
       </div>
 
-      {/* Column headings */}
+      {/* Headings */}
       <div className="grid grid-cols-12 gap-2 text-sm font-semibold text-gray-700 px-1">
         <div className="col-span-7">Player Name</div>
         <div className="col-span-5 text-right">Strokes on Hole</div>
       </div>
 
-      {/* Player rows */}
+      {/* Player Rows with Stableford Preview */}
       <div className="space-y-2">
         {players.map((p) => {
-          const val = scores[p.id]?.[currentHole];
-          const display = (val ?? DEFAULT_STROKES).toString();
+          const strokes = scores[p.id]?.[currentHole] ?? DEFAULT_STROKES;
+
+          // SHOTS RECEIVED
+          const shots = getShotsReceived(p.playing_handicap, holeSI);
+
+          // NETT
+          const nett =
+            holePar != null ? strokes - shots - holePar : null;
+
+          // Stableford Points
+          const pts = nett != null ? getStablefordPoints(nett) : 0;
+
+          // Colour tag
+          const ptsColor =
+            pts >= 4
+              ? "text-purple-600"
+              : pts === 3
+              ? "text-green-600"
+              : pts === 2
+              ? "text-blue-600"
+              : pts === 1
+              ? "text-orange-600"
+              : "text-red-600";
 
           return (
             <div
               key={p.id}
-              className="grid grid-cols-12 gap-2 items-center bg-white p-3 rounded shadow"
+              className="bg-white p-3 rounded shadow space-y-1"
             >
-              {/* Player Name */}
-              <div className="col-span-7 font-medium">{p.player_name}</div>
+              {/* Line 1: Player + input + +/- */}
+              <div className="grid grid-cols-12 gap-2 items-center">
+                <div className="col-span-7 font-medium">
+                  {p.player_name}
+                </div>
 
-              {/* Strokes UI */}
-              <div className="col-span-5 flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  className="h-10 w-10 rounded bg-gray-200 text-xl leading-none"
-                  onClick={() => adjustStroke(p.id, -1)}
-                >
-                  –
-                </button>
+                <div className="col-span-5 flex items-center justify-end gap-2">
+                  <button
+                    className="h-10 w-10 rounded bg-gray-200 text-xl leading-none"
+                    onClick={() => adjustStroke(p.id, -1)}
+                  >
+                    –
+                  </button>
 
-                <input
-                  className="w-20 text-center p-2 border rounded"
-                  inputMode="numeric"
-                  value={display}
-                  onChange={(e) => setStroke(p.id, e.target.value)}
-                />
+                  <input
+                    className="w-20 text-center p-2 border rounded"
+                    inputMode="numeric"
+                    value={strokes.toString()}
+                    onChange={(e) => setStroke(p.id, e.target.value)}
+                  />
 
-                <button
-                  type="button"
-                  className="h-10 w-10 rounded
- bg-gray-200 text-xl leading-none"
-                  onClick={() => adjustStroke(p.id, +1)}
-                >
-                  +
-                </button>
+                  <button
+                    className="h-10 w-10 rounded bg-gray-200 text-xl leading-none"
+                    onClick={() => adjustStroke(p.id, +1)}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+
+              {/* Line 2: Nett + Points + Shots */}
+              <div className="text-sm flex justify-between px-1">
+                <span>
+                  Nett:{" "}
+                  <span className="font-semibold">
+                    {nett != null ? nett : "-"}
+                  </span>
+                  {" • "}
+                  <span className={`font-semibold ${ptsColor}`}>
+                    {pts} pts
+                  </span>
+                </span>
+
+                <span className="text-gray-600">
+                  (Receives {shots} shot
+                  {shots === 1 ? "" : "s"} on this hole)
+                </span>
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* Finish Confirmation Modal */}
+      {/* Finish Modal */}
       {showFinishConfirm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
           <div className="bg-white p-6 rounded shadow-xl space-y-4 max-w-sm text-center">
@@ -328,7 +408,6 @@ export default function ScoreClient() {
           </div>
         </div>
       )}
-
     </div>
   );
 }
