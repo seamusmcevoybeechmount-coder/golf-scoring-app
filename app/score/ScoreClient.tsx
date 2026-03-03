@@ -5,10 +5,8 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
-/** Minimal shape for players used on the scoring page */
 type Player = { id: string; player_name: string };
 
-/** scores[playerId][holeNumber] = strokes */
 type ScoreMap = { [playerId: string]: { [hole: number]: number | undefined } };
 
 export default function ScoreClient() {
@@ -19,13 +17,12 @@ export default function ScoreClient() {
   const [scores, setScores] = useState<ScoreMap>({});
   const [showFinishConfirm, setShowFinishConfirm] = useState(false);
 
-  const holeLabel = useMemo(() => `Hole ${currentHole}`, [currentHole]);
+  const holeLabel = useMemo(() => `HOLE ${currentHole}`, [currentHole]);
 
-  // Load players + scores
   useEffect(() => {
     if (!competitionId) return;
+
     (async () => {
-      // Load players
       const { data: playersData, error: playersErr } = await supabase
         .from("players")
         .select("id, player_name")
@@ -38,7 +35,6 @@ export default function ScoreClient() {
       }
       setPlayers(playersData ?? []);
 
-      // Load existing score entries
       const { data: entryData, error: entriesErr } = await supabase
         .from("score_entries")
         .select("player_id, hole_number, strokes")
@@ -59,15 +55,14 @@ export default function ScoreClient() {
     })();
   }, [competitionId]);
 
-  /** Next / previous hole */
   function nextHole() {
     setCurrentHole((h) => (h % 18) + 1);
   }
+
   function prevHole() {
     setCurrentHole((h) => ((h - 2 + 18) % 18) + 1);
   }
 
-  /** Update a player's strokes for the current hole */
   function setStroke(playerId: string, value: string) {
     setScores((prev) => ({
       ...prev,
@@ -78,7 +73,6 @@ export default function ScoreClient() {
     }));
   }
 
-  /** Saves scores for the current hole */
   async function saveHole() {
     if (!competitionId) return;
 
@@ -105,28 +99,22 @@ export default function ScoreClient() {
     );
   }
 
-  /** Handle next hole */
   async function handleNext() {
     await saveHole();
     nextHole();
   }
 
-  /** Handle previous hole */
   async function handlePrev() {
     await saveHole();
     prevHole();
   }
 
-  /** When the user confirms FINISH */
   async function handleFinish() {
-    await saveHole(); // ensure hole 18 saved
+    await saveHole();
     setShowFinishConfirm(false);
-
-    // Redirect to leaderboard with correct competition_id
     window.location.href = `/leaderboard?competition_id=${competitionId}`;
   }
 
-  // If no competition id
   if (!competitionId) {
     return (
       <div className="space-y-3">
@@ -140,15 +128,20 @@ export default function ScoreClient() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Scoring</h1>
+      {/* BIG HOLE NUMBER */}
+      <div className="text-center mt-4 mb-2">
+        <h2 className="text-4xl font-extrabold uppercase tracking-wide">
+          {holeLabel}
+        </h2>
+      </div>
 
-      {/* NAV BAR FOR HOLE CONTROL */}
+      {/* Prev / Next / Finish buttons */}
       <div className="flex items-center justify-between bg-white p-3 rounded shadow">
         <button onClick={handlePrev} className="px-3 py-2 bg-gray-200 rounded">
           Prev
         </button>
 
-        <div className="font-semibold">{holeLabel}</div>
+        <div className="font-semibold">{/* Keeping spacing centered */}</div>
 
         {currentHole < 18 ? (
           <button
@@ -167,7 +160,7 @@ export default function ScoreClient() {
         )}
       </div>
 
-      {/* LINKS TO LEADERBOARDS */}
+      {/* Leaderboard shortcuts */}
       <div className="flex gap-2">
         <Link
           className="px-3 py-2 bg-blue-600 text-white rounded"
@@ -176,7 +169,6 @@ export default function ScoreClient() {
         >
           Open Leaderboard
         </Link>
-
         <Link
           className="px-3 py-2 bg-gray-800 text-white rounded"
           href={`/leaderboard-tv?competition_id=${competitionId}`}
@@ -186,7 +178,13 @@ export default function ScoreClient() {
         </Link>
       </div>
 
-      {/* PLAYER INPUTS */}
+      {/* TABLE HEADINGS */}
+      <div className="grid grid-cols-12 gap-2 text-sm font-semibold text-gray-700 px-1 mt-4">
+        <div className="col-span-7">Player Name</div>
+        <div className="col-span-5 text-right">Strokes on Hole</div>
+      </div>
+
+      {/* PLAYER INPUT ROWS */}
       <div className="space-y-2">
         {players.map((p) => (
           <div
@@ -196,11 +194,11 @@ export default function ScoreClient() {
             <div className="col-span-7 font-medium">{p.player_name}</div>
 
             <input
-              className="col-span-5 p-2 border rounded"
+              className="col-span-5 p-2 border rounded text-right"
               inputMode="numeric"
               value={(scores[p.id]?.[currentHole] ?? "").toString()}
               onChange={(e) => setStroke(p.id, e.target.value)}
-              placeholder="strokes"
+              placeholder="0"
             />
           </div>
         ))}
