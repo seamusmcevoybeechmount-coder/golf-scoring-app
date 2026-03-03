@@ -8,24 +8,22 @@ import { supabase } from "@/lib/supabaseClient";
 /** Minimal shape for players used on the scoring page */
 type Player = { id: string; player_name: string };
 
-/** scores[playerId][holeNumber] = strokes (or undefined if not set) */
+/** scores[playerId][holeNumber] = strokes */
 type ScoreMap = { [playerId: string]: { [hole: number]: number | undefined } };
 
 export default function ScoreClient() {
   const sp = useSearchParams();
   const competitionId = sp.get("competition_id");
-
   const [players, setPlayers] = useState<Player[]>([]);
   const [currentHole, setCurrentHole] = useState<number>(1);
   const [scores, setScores] = useState<ScoreMap>({});
+  const [showFinishConfirm, setShowFinishConfirm] = useState(false);
 
-  // Friendly label for the current hole
   const holeLabel = useMemo(() => `Hole ${currentHole}`, [currentHole]);
 
-  // Load players and any existing scores for this competition
+  // Load players + scores
   useEffect(() => {
     if (!competitionId) return;
-
     (async () => {
       // Load players
       const { data: playersData, error: playersErr } = await supabase
@@ -40,7 +38,7 @@ export default function ScoreClient() {
       }
       setPlayers(playersData ?? []);
 
-      // Load existing score entries (strokes) for the competition
+      // Load existing score entries
       const { data: entryData, error: entriesErr } = await supabase
         .from("score_entries")
         .select("player_id, hole_number, strokes")
@@ -56,11 +54,12 @@ export default function ScoreClient() {
         if (!map[r.player_id]) map[r.player_id] = {};
         map[r.player_id][r.hole_number] = r.strokes ?? undefined;
       });
+
       setScores(map);
     })();
   }, [competitionId]);
 
-  /** Wrap to next/previous hole */
+  /** Next / previous hole */
   function nextHole() {
     setCurrentHole((h) => (h % 18) + 1);
   }
@@ -68,7 +67,7 @@ export default function ScoreClient() {
     setCurrentHole((h) => ((h - 2 + 18) % 18) + 1);
   }
 
-  /** Update local strokes for current hole for one player */
+  /** Update a player's strokes for the current hole */
   function setStroke(playerId: string, value: string) {
     setScores((prev) => ({
       ...prev,
@@ -79,11 +78,10 @@ export default function ScoreClient() {
     }));
   }
 
-  /** Save current hole strokes for all players that have a value */
+  /** Saves scores for the current hole */
   async function saveHole() {
     if (!competitionId) return;
 
-    // Build a small list of entries to upsert
     const payloads = players
       .map((p) => {
         const strokes = scores[p.id]?.[currentHole];
@@ -91,7 +89,6 @@ export default function ScoreClient() {
       })
       .filter(Boolean) as { player_id: string; strokes: number }[];
 
-    // POST each entry via the API which calls the upsert RPC (trigger calculates stableford)
     await Promise.all(
       payloads.map((rec) =>
         fetch("/api/scores", {
@@ -108,18 +105,29 @@ export default function ScoreClient() {
     );
   }
 
+  /** Handle next hole */
   async function handleNext() {
     await saveHole();
     nextHole();
   }
 
+  /** Handle previous hole */
   async function handlePrev() {
     await saveHole();
     prevHole();
   }
 
+  /** When the user confirms FINISH */
+  async function handleFinish() {
+    await saveHole(); // ensure hole 18 saved
+    setShowFinishConfirm(false);
+
+    // Redirect to leaderboard with correct competition_id
+    window.location.href = `/leaderboard?competition_id=${competitionId}`;
+  }
+
+  // If no competition id
   if (!competitionId) {
-    // If user lands here without a competition id, give a helpful message
     return (
       <div className="space-y-3">
         <h1 className="text-2xl font-bold">Scoring</h1>
@@ -134,27 +142,37 @@ export default function ScoreClient() {
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Scoring</h1>
 
-      {/* Hole navigation toolbar */}
+      {/* NAV BAR FOR HOLE CONTROL */}
       <div className="flex items-center justify-between bg-white p-3 rounded shadow">
         <button onClick={handlePrev} className="px-3 py-2 bg-gray-200 rounded">
           Prev
         </button>
+
         <div className="font-semibold">{holeLabel}</div>
-        <button
-          onClick={handleNext}
-          className="px-3 py-2 bg-gray-800 text-white rounded"
-        >
-          Next
-        </button>
+
+        {currentHole < 18 ? (
+          <button
+            onClick={handleNext}
+            className="px-3 py-2 bg-gray-800 text-white rounded"
+          >
+            Next
+          </button>
+        ) : (
+          <button
+            onClick={() => setShowFinishConfirm(true)}
+            className="px-3 py-2 bg-green-600 text-white rounded"
+          >
+            Finish
+          </button>
+        )}
       </div>
 
-      {/* Buttons to open the leaderboards for this competition */}
+      {/* LINKS TO LEADERBOARDS */}
       <div className="flex gap-2">
         <Link
           className="px-3 py-2 bg-blue-600 text-white rounded"
           href={`/leaderboard?competition_id=${competitionId}`}
           target="_blank"
-          rel="noopener noreferrer"
         >
           Open Leaderboard
         </Link>
@@ -163,13 +181,12 @@ export default function ScoreClient() {
           className="px-3 py-2 bg-gray-800 text-white rounded"
           href={`/leaderboard-tv?competition_id=${competitionId}`}
           target="_blank"
-          rel="noopener noreferrer"
         >
           Open TV Leaderboard
         </Link>
       </div>
 
-      {/* Per-player inputs for the current hole */}
+      {/* PLAYER INPUTS */}
       <div className="space-y-2">
         {players.map((p) => (
           <div
@@ -177,6 +194,7 @@ export default function ScoreClient() {
             className="grid grid-cols-12 gap-2 items-center bg-white p-3 rounded shadow"
           >
             <div className="col-span-7 font-medium">{p.player_name}</div>
+
             <input
               className="col-span-5 p-2 border rounded"
               inputMode="numeric"
@@ -189,9 +207,39 @@ export default function ScoreClient() {
       </div>
 
       <div className="text-sm text-gray-600">
-        Strokes are saved when you click Next/Prev. You can revisit any hole to
-        edit and resave.
+        Strokes are saved when you click Next/Prev.  
+        You can revisit any hole to edit and resave.
       </div>
+
+      {/* FINISH CONFIRMATION MODAL */}
+      {showFinishConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
+          <div className="bg-white p-6 rounded shadow-xl space-y-4 max-w-sm text-center">
+            <h2 className="text-xl font-bold">Finish Round?</h2>
+
+            <p className="text-gray-700">
+              Are you sure you want to finish the round?  
+              You can still go back and adjust scores if needed.
+            </p>
+
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={() => setShowFinishConfirm(false)}
+                className="px-4 py-2 bg-gray-200 rounded"
+              >
+                Cancel
+              </button>
+
+              <button
+                onClick={handleFinish}
+                className="px-4 py-2 bg-green-600 text-white rounded"
+              >
+                Yes, Finish
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
