@@ -9,6 +9,9 @@ type Player = { id: string; player_name: string };
 
 type ScoreMap = { [playerId: string]: { [hole: number]: number | undefined } };
 
+// Default strokes to show (and save if unchanged)
+const DEFAULT_STROKES = 5;
+
 export default function ScoreClient() {
   const sp = useSearchParams();
   const competitionId = sp.get("competition_id");
@@ -23,6 +26,7 @@ export default function ScoreClient() {
     if (!competitionId) return;
 
     (async () => {
+      // Load players
       const { data: playersData, error: playersErr } = await supabase
         .from("players")
         .select("id, player_name")
@@ -35,6 +39,7 @@ export default function ScoreClient() {
       }
       setPlayers(playersData ?? []);
 
+      // Load existing score entries
       const { data: entryData, error: entriesErr } = await supabase
         .from("score_entries")
         .select("player_id, hole_number, strokes")
@@ -63,25 +68,42 @@ export default function ScoreClient() {
     setCurrentHole((h) => ((h - 2 + 18) % 18) + 1);
   }
 
+  /** Set explicit strokes (from input) */
   function setStroke(playerId: string, value: string) {
+    // Allow empty for UI, but convert to number if present
+    const n = value.trim() === "" ? undefined : Number(value);
     setScores((prev) => ({
       ...prev,
       [playerId]: {
         ...(prev[playerId] || {}),
-        [currentHole]: value ? Number(value) : undefined,
+        [currentHole]: n,
       },
     }));
   }
 
+  /** Increment/decrement helpers for + / – buttons */
+  function adjustStroke(playerId: string, delta: number) {
+    const current = scores[playerId]?.[currentHole];
+    const next = Math.max(1, (current ?? DEFAULT_STROKES) + delta);
+    setScores((prev) => ({
+      ...prev,
+      [playerId]: {
+        ...(prev[playerId] || {}),
+        [currentHole]: next,
+      },
+    }));
+  }
+
+  /** Persist current hole scores (uses DEFAULT_STROKES when empty) */
   async function saveHole() {
     if (!competitionId) return;
 
-    const payloads = players
-      .map((p) => {
-        const strokes = scores[p.id]?.[currentHole];
-        return strokes ? { player_id: p.id, strokes } : null;
-      })
-      .filter(Boolean) as { player_id: string; strokes: number }[];
+    const payloads = players.map((p) => {
+      const val = scores[p.id]?.[currentHole];
+      // If undefined (not touched), use DEFAULT_STROKES for saving.
+      const strokes = val ?? DEFAULT_STROKES;
+      return { player_id: p.id, strokes };
+    });
 
     await Promise.all(
       payloads.map((rec) =>
@@ -141,7 +163,7 @@ export default function ScoreClient() {
           Prev
         </button>
 
-        <div className="font-semibold">{/* Keeping spacing centered */}</div>
+        <div className="font-semibold">{/* spacing keeper */}</div>
 
         {currentHole < 18 ? (
           <button
@@ -184,24 +206,52 @@ export default function ScoreClient() {
         <div className="col-span-5 text-right">Strokes on Hole</div>
       </div>
 
-      {/* PLAYER INPUT ROWS */}
+      {/* PLAYER ROWS with – / + and default 5 */}
       <div className="space-y-2">
-        {players.map((p) => (
-          <div
-            key={p.id}
-            className="grid grid-cols-12 gap-2 items-center bg-white p-3 rounded shadow"
-          >
-            <div className="col-span-7 font-medium">{p.player_name}</div>
+        {players.map((p) => {
+          const value = scores[p.id]?.[currentHole];
+          const display = (value ?? DEFAULT_STROKES).toString();
+          return (
+            <div
+              key={p.id}
+              className="grid grid-cols-12 gap-2 items-center bg-white p-3 rounded shadow"
+            >
+              {/* Player Name */}
+              <div className="col-span-7 font-medium">{p.player_name}</div>
 
-            <input
-              className="col-span-5 p-2 border rounded text-right"
-              inputMode="numeric"
-              value={(scores[p.id]?.[currentHole] ?? "").toString()}
-              onChange={(e) => setStroke(p.id, e.target.value)}
-              placeholder="0"
-            />
-          </div>
-        ))}
+              {/* Strokes control: – [ input ] + */}
+              <div className="col-span-5">
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    className="h-10 w-10 rounded bg-gray-200 text-xl leading-none"
+                    onClick={() => adjustStroke(p.id, -1)}
+                    aria-label={`Decrease strokes for ${p.player_name}`}
+                  >
+                    –
+                  </button>
+
+                  <input
+                    className="w-20 text-center p-2 border rounded"
+                    inputMode="numeric"
+                    value={display}
+                    onChange={(e) => setStroke(p.id, e.target.value)}
+                    placeholder={DEFAULT_STROKES.toString()}
+                  />
+
+                  <button
+                    type="button"
+                    className="h-10 w-10 rounded bg-gray-200 text-xl leading-none"
+                    onClick={() => adjustStroke(p.id, +1)}
+                    aria-label={`Increase strokes for ${p.player_name}`}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <div className="text-sm text-gray-600">
