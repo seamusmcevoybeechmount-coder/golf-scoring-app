@@ -1,12 +1,37 @@
-// app/page.tsx
+import Image from "next/image";
+import Link from "next/link";
+
 export default function Page() {
   return (
-    <main className="p-6 space-y-4">
-      <h1 className="text-2xl font-bold">Golf Scoring App</h1>
-      <p className="text-gray-700">Pick a course to get started.</p>
-      <div className="flex gap-3">
-        <a className="px-4 py-2 rounded bg-blue-600 text-white" href="/courses">Go to Courses</a>
-        <a className="px-4 py-2 rounded bg-gray-200" href="/leaderboard">View Leaderboard</a>
+    <main className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-sky-200/50 to-white p-6">
+      
+      <div className="flex flex-col items-center gap-4">
+        
+        {/* Logo */}
+        <div className="relative h-20 w-20">
+          /heath-logo.png
+        </div>
+
+        {/* Title */}
+        <h1 className="text-3xl font-bold text-gray-900 text-center">
+          The Heath Golf Club
+        </h1>
+
+        <p className="text-gray-700 text-center">
+          Mobile Scoring & Live Leaderboards
+        </p>
+
+        {/* Buttons */}
+        <div className="flex gap-4 mt-4">
+          /courses
+            Start Scoring
+          </Link>
+
+          /leaderboard
+            View Leaderboard
+          </Link>
+        </div>
+
       </div>
     </main>
   );
