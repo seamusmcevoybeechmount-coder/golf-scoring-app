@@ -194,17 +194,16 @@ export default function ScoreClient() {
     return si <= extras ? base + 1 : base;
   }
 
-  function getStablefordPoints(nett: number | null): number {
-    if (nett == null) return 0;
+function getStablefordPoints(nett: number | null): number {
+  if (nett == null) return 0;
 
-    if (nett <= -3) return 6; // condor
-    if (nett === -2) return 5; // albatross
-    if (nett === -1) return 4; // eagle
-    if (nett === 0) return 3; // birdie
-    if (nett === 1) return 2; // par
-    if (nett === 2) return 1; // bogey
-    return 0; // double bogey or worse
-  }
+  if (nett <= -3) return 5;  // Albatross
+  if (nett === -2) return 4; // Eagle
+  if (nett === -1) return 3; // Birdie
+  if (nett === 0) return 2;  // Par
+  if (nett === 1) return 1;  // Bogey
+  return 0;                  // Double bogey or worse
+}
 
   // -------------------------------
   // UI Rendering
