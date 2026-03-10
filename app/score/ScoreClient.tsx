@@ -8,8 +8,8 @@ import { supabase } from "@/lib/supabaseClient";
 type Player = {
   id: string;
   player_name: string;
-  handicap_index: number;
-  playing_handicap: number;
+  handicap_index: number;   // WHS Handicap Index (HI)
+  playing_handicap: number; // (not used if custom allowance is enabled)
 };
 
 type TeeRow = {
@@ -28,8 +28,7 @@ type ScoreMap = { [playerId: string]: { [hole: number]: number | undefined } };
 
 // Default strokes now 0
 const DEFAULT_STROKES = 0;
-
-// 95% Stableford allowance
+// 95% allowance for Stableford
 const ALLOWANCE = 0.95;
 
 export default function ScoreClient() {
@@ -40,15 +39,31 @@ export default function ScoreClient() {
   const [players, setPlayers] = useState<Player[]>([]);
   const [scores, setScores] = useState<ScoreMap>({});
   const [tee, setTee] = useState<TeeRow | null>(null);
-  const [currentHole, setCurrentHole] = useState(1);
+
+  // Initialize current hole from the query string (?hole=), default 1
+  const holeFromQuery = useMemo(() => {
+    const h = Number(sp.get("hole") || "1");
+    return Number.isFinite(h) && h >= 1 && h <= 18 ? h : 1;
+  }, [sp]);
+  const [currentHole, setCurrentHole] = useState<number>(holeFromQuery);
+
+  // Keep the URL ?hole= in sync when currentHole changes (without losing competition_id)
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("hole", String(currentHole));
+    // preserve competition_id if present
+    if (competitionId) url.searchParams.set("competition_id", competitionId);
+    // Don't add a new history entry for every hole change
+    router.replace(`${url.pathname}?${url.searchParams.toString()}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentHole, competitionId]);
+
   const [showFinishConfirm, setShowFinishConfirm] = useState(false);
 
   const holePar = tee?.par?.[currentHole - 1] ?? null;
   const holeSI = tee?.stroke_index?.[currentHole - 1] ?? null;
 
-  // Header simplified to only "HOLE X"
-  const holeTitle = useMemo(() => `HOLE ${currentHole}`, [currentHole]);
-
+  // Helpers: CH/PH
   function getCourseHandicap(
     handicapIndex: number | null | undefined,
     teeRow: TeeRow | null
@@ -65,11 +80,10 @@ export default function ScoreClient() {
     return Math.round(courseHandicap * ALLOWANCE);
   }
 
-  // Load players, scores, tee data
+  // Load players, scores, tee meta
   useEffect(() => {
     if (!competitionId) return;
-
-    let cancelled = false;
+    let isCancelled = false;
 
     (async () => {
       const { data: playersData } = await supabase
@@ -77,15 +91,13 @@ export default function ScoreClient() {
         .select("id, player_name, handicap_index, playing_handicap, tee_id")
         .eq("competition_id", competitionId)
         .order("created_at");
-
-      if (!cancelled) setPlayers(playersData ?? []);
+      if (!isCancelled) setPlayers(playersData ?? []);
 
       const { data: entryData } = await supabase
         .from("score_entries")
         .select("player_id, hole_number, strokes")
         .eq("competition_id", competitionId);
-
-      if (!cancelled) {
+      if (!isCancelled) {
         const map: ScoreMap = {};
         (entryData ?? []).forEach((r: any) => {
           if (!map[r.player_id]) map[r.player_id] = {};
@@ -99,7 +111,6 @@ export default function ScoreClient() {
         .select("tee_id")
         .eq("id", competitionId)
         .single();
-
       if (!compRow?.tee_id) return;
 
       const { data: teeRow } = await supabase
@@ -109,57 +120,50 @@ export default function ScoreClient() {
         )
         .eq("id", compRow.tee_id)
         .single();
-
-      if (!cancelled && teeRow) setTee(teeRow as TeeRow);
+      if (!isCancelled && teeRow) setTee(teeRow as TeeRow);
     })();
 
     return () => {
-      cancelled = true;
+      isCancelled = true;
     };
   }, [competitionId]);
 
+  // Navigation
   const nextHole = useCallback(() => setCurrentHole((h) => (h % 18) + 1), []);
-  const prevHole = useCallback(() => setCurrentHole((h) => ((h - 2 + 18) % 18) + 1), []);
+  const prevHole = useCallback(
+    () => setCurrentHole((h) => ((h - 2 + 18) % 18) + 1),
+    []
+  );
 
-  // Manual score change
+  // Manual set
   function setStroke(playerId: string, value: string) {
     const trimmed = value.trim();
     const n = trimmed === "" ? undefined : Number(trimmed);
     const safe =
       Number.isFinite(n as number) && (n as number) >= 0 ? (n as number) : undefined;
-
     setScores((prev) => ({
       ...prev,
-      [playerId]: {
-        ...(prev[playerId] ?? {}),
-        [currentHole]: safe,
-      },
+      [playerId]: { ...(prev[playerId] ?? {}), [currentHole]: safe },
     }));
   }
 
-  // Increment/decrement
+  // + / –
   function adjustStroke(playerId: string, delta: number) {
     const current = scores[playerId]?.[currentHole];
     const next = Math.max(0, (current ?? DEFAULT_STROKES) + delta);
-
     setScores((prev) => ({
       ...prev,
-      [playerId]: {
-        ...(prev[playerId] ?? {}),
-        [currentHole]: next,
-      },
+      [playerId]: { ...(prev[playerId] ?? {}), [currentHole]: next },
     }));
   }
 
-  // Save single hole
+  // Save strokes for a hole
   async function saveHole() {
     if (!competitionId) return;
-
     const payloads = players.map((p) => {
       const val = scores[p.id]?.[currentHole];
       return { player_id: p.id, strokes: val ?? DEFAULT_STROKES };
     });
-
     await Promise.all(
       payloads.map((rec) =>
         fetch("/api/scores", {
@@ -180,18 +184,17 @@ export default function ScoreClient() {
     await saveHole();
     nextHole();
   }
-
   async function handlePrev() {
     await saveHole();
     prevHole();
   }
-
   async function handleFinish() {
     await saveHole();
     setShowFinishConfirm(false);
     router.push(`/leaderboard?competition_id=${competitionId}`);
   }
 
+  // WHS strokes received + points
   function getShotsReceived(playingHandicap: number, si: number | null): number {
     if (si == null || playingHandicap <= 0) return 0;
     const base = Math.floor(playingHandicap / 18);
@@ -218,7 +221,6 @@ export default function ScoreClient() {
   ): number {
     if (!teeRow) return 0;
     let total = 0;
-
     for (let h = 1; h <= uptoHole; h++) {
       const par = teeRow.par?.[h - 1] ?? null;
       const si = teeRow.stroke_index?.[h - 1] ?? null;
@@ -227,7 +229,6 @@ export default function ScoreClient() {
       const nettToPar = par != null ? (strokes - shots) - par : null;
       total += getStablefordPoints(nettToPar);
     }
-
     return total;
   }
 
@@ -241,19 +242,9 @@ export default function ScoreClient() {
 
   return (
     <div className="space-y-6 pb-10">
-      {/* Simplified Header */}
-      <div className="bg-white rounded-lg shadow p-5 text-center border">
-        <h2 className="text-4xl font-extrabold uppercase tracking-wide">
-          {holeTitle}
-        </h2>
-        {tee && (
-          <p className="mt-2 text-gray-700 font-semibold uppercase">
-            {tee.tee_name} TEE
-          </p>
-        )}
-      </div>
+      {/* NOTE: Header card removed; hole is shown in /app/score/layout.tsx top bar */}
 
-      {/* Navigation */}
+      {/* Prev / Next / Finish */}
       <div className="flex items-center justify-between bg-white p-3 rounded shadow">
         <button className="px-3 py-2 bg-gray-200 rounded" onClick={handlePrev}>
           Prev
@@ -276,7 +267,7 @@ export default function ScoreClient() {
         )}
       </div>
 
-      {/* Links */}
+      {/* Leaderboard Links */}
       <div className="flex gap-2">
         <Link
           href={`/leaderboard?competition_id=${competitionId}`}
@@ -300,7 +291,7 @@ export default function ScoreClient() {
         <div className="col-span-5 text-right">Strokes on Hole</div>
       </div>
 
-      {/* Player Rows */}
+      {/* Player Rows with Stableford Preview + Cumulative */}
       <div className="space-y-2">
         {players.map((p) => {
           const strokes = scores[p.id]?.[currentHole] ?? DEFAULT_STROKES;
@@ -333,6 +324,7 @@ export default function ScoreClient() {
 
           return (
             <div key={p.id} className="bg-white p-3 rounded shadow space-y-1">
+              {/* Line 1: Player + HI/CH/PH + input + +/- */}
               <div className="grid grid-cols-12 gap-2 items-center">
                 <div className="col-span-7 font-medium">
                   <div>{p.player_name}</div>
@@ -364,22 +356,19 @@ export default function ScoreClient() {
                 </div>
               </div>
 
+              {/* Line 2: Nett + Points + Shots */}
               <div className="text-sm flex justify-between px-1">
                 <span>
-                  Nett:{" "}
-                  <span className="font-semibold">
-                    {nett != null ? nett : "-"}
-                  </span>{" "}
-                  •{" "}
-                  <span className={`font-semibold ${ptsColor}`}>
-                    {pts} pts
-                  </span>
+                  Nett: <span className="font-semibold">{nett != null ? nett : "-"}</span>
+                  {" • "}
+                  <span className={`font-semibold ${ptsColor}`}>{pts} pts</span>
                 </span>
                 <span className="text-gray-600">
                   (Receives {shots} shot{shots === 1 ? "" : "s"} on this hole)
                 </span>
               </div>
 
+              {/* Line 3: Cumulative total */}
               <div className="text-sm text-red-600 italic px-1">
                 Total Stableford Points (to Hole {currentHole}): {cumulative}
               </div>
@@ -388,13 +377,14 @@ export default function ScoreClient() {
         })}
       </div>
 
+      {/* Finish Modal */}
       {showFinishConfirm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
           <div className="bg-white p-6 rounded shadow-xl space-y-4 max-w-sm text-center">
             <h2 className="text-xl font-bold">Finish Round?</h2>
             <p className="text-gray-700">
-              Are you sure you want to finish the round? You can still go back and
-              adjust scores if needed.
+              Are you sure you want to finish the round? You can still go back and adjust
+              scores if needed.
             </p>
             <div className="flex justify-center gap-4">
               <button
